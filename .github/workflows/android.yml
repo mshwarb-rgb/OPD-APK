@@ -1,60 +1,17 @@
-name: Build Android APK
+- name: Install dependencies
+  run: npm install
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ main ]
+- name: Add Android platform (Capacitor)
+  run: npx cap add android   # <-- fixed, no --skip-npm
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+- name: Setup Java 17
+  uses: actions/setup-java@v4
+  with:
+    distribution: temurin
+    java-version: 17
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+- name: Setup Android SDK
+  uses: android-actions/setup-android@v3
 
-      # Handy: list files so we can see www/ exists
-      - name: Show repo tree
-        run: |
-          echo "PWD=$(pwd)"
-          ls -la
-          echo "---- www/ ----"
-          ls -la www || true
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-
-      # Use npm install (NOT npm ci) since you may not have package-lock.json
-      - name: Install dependencies
-        run: npm install
-
-      - name: Add Android platform (Capacitor)
-        run: npx cap add android --skip-npm
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Copy web to native
-        run: npx cap copy android
-
-      # Make sure Gradle wrapper is executable
-      - name: Make gradle wrapper executable
-        run: chmod +x android/gradlew
-
-      - name: Build debug APK
-        working-directory: android
-        run: ./gradlew assembleDebug --stacktrace
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: OPD-LoggerX-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+- name: Copy web to native
+  run: npx cap copy android
