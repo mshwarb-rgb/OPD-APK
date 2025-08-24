@@ -27,7 +27,7 @@ nav button{ padding:8px; border:1px solid #eee; border-radius:10px; background:#
 .small{ color:var(--muted); font-size:12px; }
 .card{ border:1px solid #eee; border-radius:10px; padding:8px; background:#fff; }
 
-/* Chips */
+/* Chips (base) */
 .chips{ display:flex; gap:6px; flex-wrap:wrap; }
 .chip{
   display:flex; align-items:center; justify-content:center;
@@ -37,23 +37,55 @@ nav button{ padding:8px; border:1px solid #eee; border-radius:10px; background:#
   border:2px solid #eaeaea;
   cursor:pointer; font-weight:700; text-align:center;
   line-height:1.1;
-  white-space:nowrap;
+  white-space:nowrap;  /* keep short labels on one line by default */
 }
 .chip.selected{ background:var(--chip-sel); border-color:var(--primary); color:var(--primary); }
 
-/* Force Age & Disposition into one compact row (no wrap, no scrolling) */
-#age-chips, #disp-chips {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr); /* 4 equal-width columns */
-  gap: 6px;
+/* ===== One-row compact groups ===== */
+
+/* Age: 4 equal boxes in one row (wrap text inside, no sideways scroll) */
+#age-chips{
+  display:grid;
+  grid-template-columns:repeat(4, 1fr);
+  gap:6px;
+  align-items:stretch;
 }
-#age-chips .chip, #disp-chips .chip {
-  flex: unset;
-  min-width: 0;
-  text-align: center;
+#age-chips .chip{
+  flex:unset; min-width:0;
+  white-space:normal;           /* allow wrapping if needed */
+  overflow-wrap:anywhere;
+  padding:8px 6px;
+  line-height:1.15;
+  min-height:2.4em;             /* room for up to ~2 lines */
 }
 
-/* Grid */
+/* Disposition: 4 equal boxes in one row (wrap long labels inside) */
+#disp-chips{
+  display:grid;
+  grid-template-columns:repeat(4, 1fr);
+  gap:6px;
+  align-items:stretch;
+}
+#disp-chips .chip{
+  flex:unset; min-width:0;
+  white-space:normal;           /* allow multi-line labels */
+  overflow-wrap:break-word;     /* break long words gracefully */
+  text-align:center;
+  padding:8px 6px;
+  line-height:1.2;
+  min-height:2.8em;             /* consistent height for 2-line fit */
+}
+
+/* Slight tighten on very small screens */
+@media (max-width:380px){
+  #age-chips .chip, #disp-chips .chip{
+    font-size:12px;
+    padding:7px 6px;
+    min-height:2.4em;
+  }
+}
+
+/* Diagnosis grid */
 .grid{ display:grid; grid-template-columns: repeat(3, 1fr); gap:6px; }
 @media (min-width:760px){ .grid{ grid-template-columns: repeat(4, 1fr);} }
 .tile{ padding:8px; border:2px solid #eee; border-radius:10px; background:#fff; cursor:pointer; }
