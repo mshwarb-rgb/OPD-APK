@@ -1,114 +1,335 @@
-:root {
-  --primary:#099966; --bg:#ffffff; --text:#111; --muted:#666;
-  --chip:#f2f4f7; --chip-sel:#e7fff6; --danger:#d93025; --ok:#107c41;
+// OPD LoggerX – v15 (web PWA + Capacitor-native export)
+const APP_VERSION = "v15";
+const KEY = "opdVisitsV6";
+
+const Genders = ["Male", "Female"];
+const AgeLabels = { Under5: "<5", FiveToFourteen: "5-14", FifteenToSeventeen: "15-17", EighteenPlus: "≥18" };
+const AgeKeys = Object.keys(AgeLabels);
+const WWOpts = ["WW", "NonWW"];
+const Dispositions = ["Discharged", "Admitted", "Referred to ED", "Referred out"];
+
+const Diagnoses = [
+  [1, "Respiratory Tract Infection", "Medical"],
+  [2, "Acute Watery Diarrhea", "Medical"],
+  [3, "Acute Bloody Diarrhea", "Medical"],
+  [4, "Acute Viral Hepatitis", "Medical"],
+  [5, "Other GI Diseases", "Medical"],
+  [6, "Scabies", "Medical"],
+  [7, "Skin Infection", "Medical"],
+  [8, "Other Skin Diseases", "Medical"],
+  [9, "Genitourinary Diseases", "Medical"],
+  [10, "Musculoskeletal Diseases", "Medical"],
+  [11, "Hypertension", "Medical"],
+  [12, "Diabetes", "Medical"],
+  [13, "Epilepsy", "Medical"],
+  [14, "Eye Diseases", "Medical"],
+  [15, "ENT Diseases", "Medical"],
+  [16, "Other Medical Diseases", "Medical"],
+  [17, "Fracture", "Surgical"],
+  [18, "Burn", "Surgical"],
+  [19, "Gunshot Wound (GSW)", "Surgical"],
+  [20, "Other Wound", "Surgical"],
+  [21, "Other Surgical", "Surgical"]
+];
+const DiagByNo = Object.fromEntries(Diagnoses.map(([n, name, cat]) => [n, { name, cat }]));
+
+function loadAll() { try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { return []; } }
+function saveAll(list) { localStorage.setItem(KEY, JSON.stringify(list)); }
+function sortedAll() { return loadAll().slice().sort((a, b) => b.timestamp - a.timestamp); }
+
+// selections
+let selPID = ""; let selGender = null; let selAge = null;
+let selDiags = []; let selWW = null; let selDisp = null;
+let editUid = null;
+
+// DOM
+let pidDisplay, pidStatus, err; let scrNew, scrSum, scrData;
+
+window.initOPD = function initOPD() {
+  const vEl = document.getElementById("version");
+  if (vEl) vEl.textContent = " " + APP_VERSION;
+  pidDisplay = document.getElementById("pid-display");
+  pidStatus = document.getElementById("pid-status");
+  err = document.getElementById("error");
+  scrNew = document.getElementById("screen-new");
+  scrSum = document.getElementById("screen-summary");
+  scrData = document.getElementById("screen-data");
+
+  const _nn = document.getElementById("nav-new"); if (_nn) _nn.onclick = () => showScreen("new");
+  const _ns = document.getElementById("nav-summary"); if (_ns) _ns.onclick = () => { showScreen("summary"); renderSummary(); };
+  const _nd = document.getElementById("nav-data"); if (_nd) _nd.onclick = () => { showScreen("data"); renderTable(); };
+
+  document.querySelectorAll(".k").forEach(btn => btn.onclick = onKeypad);
+
+  const saveNewBtn = document.getElementById("save-new");
+  if (saveNewBtn) saveNewBtn.onclick = () => onSave(true);
+  const updateBtn = document.getElementById("update");
+  if (updateBtn) updateBtn.onclick = onUpdate;
+  const cancelBtn = document.getElementById("cancel-edit");
+  if (cancelBtn) cancelBtn.onclick = cancelEdit;
+  const resetBtn = document.getElementById("reset");
+  if (resetBtn) resetBtn.onclick = resetForm;
+
+  const ecsv = document.getElementById("export-csv");
+  if (ecsv) ecsv.onclick = () => downloadCSV(sortedAll());
+  const exls = document.getElementById("export-xls");
+  if (exls) exls.onclick = () => downloadXLS(sortedAll());
+  const bjson = document.getElementById("backup-json");
+  if (bjson) bjson.onclick = () => downloadJSON(sortedAll());
+  const rbtn = document.getElementById("restore-btn");
+  const rfile = document.getElementById("restore-json");
+  if (rbtn && rfile) { rbtn.onclick = () => rfile.click(); rfile.onchange = restoreJSON; }
+  const clear = document.getElementById("clear-all");
+  if (clear) clear.onclick = clearAll;
+
+  buildSelectors();
+  updatePID();
+  showScreen("new");
+};
+
+function showScreen(name) {
+  scrNew.style.display = (name === "new") ? "" : "none";
+  scrSum.style.display = (name === "summary") ? "" : "none";
+  scrData.style.display = (name === "data") ? "" : "none";
 }
-*{ box-sizing: border-box; }
-html,body{ margin:0; padding:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background:var(--bg); color:var(--text); }
 
-/* Header */
-header{ position:sticky; top:0; background:var(--bg); border-bottom:1px solid #eee; z-index:10; }
-.container{ max-width:980px; margin:0 auto; padding:10px 12px; }
-h1{ font-size:18px; margin:2px 0; }
-h2{ font-size:14px; margin:8px 0 4px; color:#333; }
-.big{ font-weight:900; font-size:22px; }
+function buildSelectors() {
+  makeChips(document.getElementById("gender-chips"), Genders, i => { selGender = i; buildSelectors(); }, selGender);
 
-/* Nav buttons */
-nav{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-top:6px; }
-nav button{ padding:8px; border:1px solid #eee; border-radius:10px; background:#fff; font-weight:700; cursor:pointer; }
+  // Age chips
+  const ageWrap = document.getElementById("age-chips");
+  ageWrap.innerHTML = "";
+  Object.values(AgeLabels).forEach((label, idx) => {
+    const div = document.createElement("div");
+    div.className = "chip";
+    div.textContent = label;
+    if (selAge === idx) div.classList.add("selected");
+    div.onclick = () => { selAge = idx; buildSelectors(); };
+    ageWrap.appendChild(div);
+  });
 
-/* Buttons */
-.btn{ background:var(--primary); color:#fff; border:none; border-radius:10px; padding:10px 12px; font-weight:800; cursor:pointer; }
-.btn.secondary{ background:#f5f5f5; color:#111; }
-.btn.warn{ background:var(--danger); color:#fff; }
+  // Diagnoses grid
+  makeDiagTiles(document.getElementById("diagnosis-grid"), Diagnoses, selDiags);
+  const diagCount = document.getElementById("diag-count");
+  if (diagCount) diagCount.textContent = selDiags.length ? `${selDiags.length}/2 selected` : "";
 
-/* Layout */
-.row{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
-.section{ margin:8px 0; }
-.small{ color:var(--muted); font-size:12px; }
-.card{ border:1px solid #eee; border-radius:10px; padding:8px; background:#fff; }
-
-/* Chips (base) */
-.chips{ display:flex; gap:6px; flex-wrap:wrap; }
-.chip{
-  display:flex; align-items:center; justify-content:center;
-  padding:10px;
-  background:var(--chip);
-  border-radius:12px;  /* mildly blunt */
-  border:2px solid #eaeaea;
-  cursor:pointer; font-weight:700; text-align:center;
-  line-height:1.1;
-  white-space:nowrap;  /* keep short labels on one line by default */
-}
-.chip.selected{ background:var(--chip-sel); border-color:var(--primary); color:var(--primary); }
-
-/* ===== One-row compact groups ===== */
-
-/* Age: 4 equal boxes in one row (wrap text inside, no sideways scroll) */
-#age-chips{
-  display:grid;
-  grid-template-columns:repeat(4, 1fr);
-  gap:6px;
-  align-items:stretch;
-}
-#age-chips .chip{
-  flex:unset; min-width:0;
-  white-space:normal;           /* allow wrapping if needed */
-  overflow-wrap:anywhere;
-  padding:8px 6px;
-  line-height:1.15;
-  min-height:2.4em;             /* room for up to ~2 lines */
-}
-
-/* Disposition: 4 equal boxes in one row (wrap long labels inside) */
-#disp-chips{
-  display:grid;
-  grid-template-columns:repeat(4, 1fr);
-  gap:6px;
-  align-items:stretch;
-}
-#disp-chips .chip{
-  flex:unset; min-width:0;
-  white-space:normal;           /* allow multi-line labels */
-  overflow-wrap:break-word;     /* break long words gracefully */
-  text-align:center;
-  padding:8px 6px;
-  line-height:1.2;
-  min-height:2.8em;             /* consistent height for 2-line fit */
-}
-
-/* Slight tighten on very small screens */
-@media (max-width:380px){
-  #age-chips .chip, #disp-chips .chip{
-    font-size:12px;
-    padding:7px 6px;
-    min-height:2.4em;
+  // WW visible if any Surgical
+  const anySurg = selDiags.some(no => DiagByNo[no]?.cat === "Surgical");
+  const wwSec = document.getElementById("ww-section");
+  if (anySurg) {
+    wwSec.style.display = "";
+    makeChips(document.getElementById("ww-chips"), WWOpts, i => { selWW = i; buildSelectors(); }, selWW);
+  } else {
+    wwSec.style.display = "none"; selWW = null;
+    const ww = document.getElementById("ww-chips"); if (ww) ww.innerHTML = "";
   }
+
+  // Disposition chips
+  const dispWrap = document.getElementById("disp-chips");
+  dispWrap.innerHTML = "";
+  Dispositions.forEach((label, idx) => {
+    const div = document.createElement("div");
+    div.className = "chip";
+    div.textContent = label;
+    if (selDisp === idx) div.classList.add("selected");
+    div.onclick = () => { selDisp = idx; buildSelectors(); };
+    dispWrap.appendChild(div);
+  });
 }
 
-/* Diagnosis grid */
-.grid{ display:grid; grid-template-columns: repeat(3, 1fr); gap:6px; }
-@media (min-width:760px){ .grid{ grid-template-columns: repeat(4, 1fr);} }
-.tile{ padding:8px; border:2px solid #eee; border-radius:10px; background:#fff; cursor:pointer; }
-.tile div:first-child{ font-size:13px; line-height:1.2; }
-.tile .small{ color:#666; font-size:12px; }
-.tile.selected{ border-color:var(--primary); background:#f7fffb; }
+function makeChips(container, options, onSelect, current) {
+  container.innerHTML = "";
+  options.forEach((label, idx) => {
+    const div = document.createElement("div");
+    div.className = "chip" + (current === idx ? " selected" : "");
+    div.textContent = label;
+    div.onclick = () => onSelect(idx);
+    container.appendChild(div);
+  });
+}
 
-/* Keypad */
-.keypad { display:grid; grid-template-columns: repeat(3, 1fr); gap:6px; max-width: 300px; }
-.keypad button { padding:12px; font-size:18px; border:2px solid #ddd; background:#fff; border-radius:10px; font-weight:800; cursor:pointer; }
+function makeDiagTiles(container, items, selectedNos) {
+  container.innerHTML = "";
+  items.forEach(([no, name, cat]) => {
+    const div = document.createElement("div");
+    const isSel = selectedNos.includes(no);
+    div.className = "tile" + (isSel ? " selected" : "");
+    div.innerHTML = `<div>${no}. ${name}</div><div class="small">${cat}</div>`;
+    div.onclick = () => toggleDiag(no);
+    container.appendChild(div);
+  });
+}
 
-/* PID box */
-.pid-box { font-size:18px; font-weight:900; letter-spacing: 1px; border:2px dashed #ccc; padding:6px 8px; border-radius:10px; min-width:100px; display:inline-block; }
-.mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+function toggleDiag(no) {
+  const idx = selDiags.indexOf(no);
+  if (idx >= 0) {
+    selDiags.splice(idx, 1);
+  } else {
+    if (selDiags.length < 2) selDiags.push(no);
+    else { selDiags.shift(); selDiags.push(no); }
+  }
+  buildSelectors();
+}
 
-/* Footer */
-.footer{ position: sticky; bottom: 0; background: var(--bg); border-top: 1px solid #eee; padding: 6px 8px; display:flex; gap:6px; flex-wrap:wrap; }
-.footer .btn{ flex:1; min-width: 120px; }
+function onKeypad(e) {
+  const k = e.currentTarget.dataset.k;
+  if (k === "C") selPID = "";
+  else if (k === "B") selPID = selPID.slice(0, -1);
+  else if (/^\d$/.test(k)) { if (selPID.length < 3) selPID += k; }
+  updatePID();
+}
+function updatePID() {
+  pidDisplay.textContent = selPID ? selPID : "---";
+  pidStatus.textContent = "";
+}
 
-/* Table */
-table{ width:100%; border-collapse: collapse; }
-th,td{ padding:6px; border-bottom:1px solid #eee; text-align:left; font-size:13px; }
+function validateSelection(requirePID = true) {
+  err.style.color = "#d93025"; err.textContent = "";
+  if (requirePID && (!selPID || selPID.length === 0)) { err.textContent = "Enter Patient ID (max 3 digits)."; return false; }
+  if (selGender === null || selAge === null || !selDiags.length || selDisp === null) { err.textContent = "Select Gender, Age, ≥1 Diagnosis (max 2), and Disposition."; return false; }
+  const anySurg = selDiags.some(no => DiagByNo[no]?.cat === "Surgical");
+  if (anySurg && selWW === null) { err.textContent = "Select WW or Non-WW for surgical diagnosis."; return false; }
+  return true;
+}
 
-/* KPIs grid */
-.kpis{ display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; }
-@media (max-width:480px){ .kpis{ grid-template-columns: repeat(2, 1fr);} }
+function newUid() { return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7); }
+function buildVisit(uidOverride = null, tsOverride = null) {
+  const diags = selDiags.slice(0, 2);
+  const names = diags.map(no => DiagByNo[no]?.name || "");
+  const cats = diags.map(no => DiagByNo[no]?.cat || "");
+  const anySurg = cats.includes("Surgical");
+  return {
+    uid: uidOverride || newUid(),
+    timestamp: tsOverride || Date.now(),
+    patientId: selPID,
+    gender: Genders[selGender],
+    ageGroup: AgeKeys[selAge],
+    ageLabel: AgeLabels[AgeKeys[selAge]],
+    diagnosisNos: diags,
+    diagnosisNames: names,
+    diagnosisNoStr: diags.join("+"),
+    diagnosisNameStr: names.join(" + "),
+    clinicalCategory: anySurg ? "Surgical" : "Medical",
+    wwFlag: anySurg ? (WWOpts[selWW] || "NA") : "NA",
+    disposition: Dispositions[selDisp]
+  };
+}
+
+function onSave() {
+  if (!validateSelection(true)) return;
+  const all = loadAll();
+  all.push(buildVisit());
+  saveAll(all);
+  tinyToast("Saved. New entry ready.", true);
+  cancelEdit();
+  try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) { window.scrollTo(0, 0); }
+}
+
+function onUpdate() {
+  if (!validateSelection(false)) return;
+  if (!editUid) return tinyToast("Not in edit mode.", false);
+  const all = loadAll();
+  const idx = all.findIndex(v => v.uid === editUid);
+  if (idx === -1) return tinyToast("Record not found.", false);
+  all[idx] = buildVisit(editUid, all[idx].timestamp);
+  saveAll(all);
+  tinyToast("Updated.", true);
+  cancelEdit();
+}
+
+function enterEdit(record) {
+  editUid = record.uid;
+  selPID = record.patientId || "";
+  selGender = Genders.indexOf(record.gender);
+  selAge = AgeKeys.indexOf(record.ageGroup);
+  if (record.diagnosisNos && Array.isArray(record.diagnosisNos)) selDiags = record.diagnosisNos.slice(0, 2);
+  else if (record.diagnosisNo) selDiags = [record.diagnosisNo];
+  else if (record.diagnosisNoStr) selDiags = record.diagnosisNoStr.split("+").map(n => parseInt(n, 10)).filter(Boolean).slice(0, 2);
+  else selDiags = [];
+  const anySurg = selDiags.some(no => DiagByNo[no]?.cat === "Surgical");
+  selWW = anySurg ? (record.wwFlag === "WW" ? 0 : record.wwFlag === "NonWW" ? 1 : null) : null;
+  selDisp = Dispositions.indexOf(record.disposition);
+  updatePID(); buildSelectors();
+  const saveNew = document.getElementById("save-new"); if (saveNew) saveNew.style.display = "none";
+  const updateBtn = document.getElementById("update"); if (updateBtn) updateBtn.style.display = "";
+  const cancelBtn = document.getElementById("cancel-edit"); if (cancelBtn) cancelBtn.style.display = "";
+  showScreen("new");
+}
+function cancelEdit() {
+  editUid = null;
+  selPID = ""; selGender = null; selAge = null; selDiags = []; selWW = null; selDisp = null;
+  updatePID(); buildSelectors();
+  const saveNew = document.getElementById("save-new"); if (saveNew) saveNew.style.display = "";
+  const updateBtn = document.getElementById("update"); if (updateBtn) updateBtn.style.display = "none";
+  const cancelBtn = document.getElementById("cancel-edit"); if (cancelBtn) cancelBtn.style.display = "none";
+}
+function resetForm() { cancelEdit(); }
+
+/* ---------- Summary ---------- */
+function renderSummary() {
+  const all = loadAll();
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const start = +today, end = start + 86400000 - 1;
+  const list = all.filter(v => v.timestamp >= start && v.timestamp <= end);
+
+  const total = list.length;
+  const male = list.filter(v => v.gender === "Male").length;
+  const female = list.filter(v => v.gender === "Female").length;
+
+  const a0 = list.filter(v => v.ageGroup === "Under5").length;
+  const a1 = list.filter(v => v.ageGroup === "FiveToFourteen").length;
+  const a2 = list.filter(v => v.ageGroup === "FifteenToSeventeen").length;
+  const a3 = list.filter(v => v.ageGroup === "EighteenPlus").length;
+
+  const surg = list.filter(v => v.clinicalCategory === "Surgical").length;
+  const med = list.filter(v => v.clinicalCategory === "Medical").length;
+
+  const ww = list.filter(v => v.clinicalCategory === "Surgical" && v.wwFlag === "WW").length;
+  const non = list.filter(v => v.clinicalCategory === "Surgical" && v.wwFlag === "NonWW").length;
+
+  const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setTxt("k-total", total);
+  setTxt("k-male", male);
+  setTxt("k-female", female);
+  setTxt("k-ww", `${ww}/${non}`);
+  setTxt("k-surg", surg);
+  setTxt("k-med", med);
+
+  // Age breakdown table
+  const tbody = document.querySelector("#age-breakdown-table tbody");
+  if (tbody) {
+    tbody.innerHTML = "";
+    [["<5", a0], ["5–14", a1], ["15–17", a2], ["≥18", a3]].forEach(([label, count]) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${label}</td><td>${count}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // Age × Gender table
+  const ag = { Under5: { Male: 0, Female: 0 }, FiveToFourteen: { Male: 0, Female: 0 }, FifteenToSeventeen: { Male: 0, Female: 0 }, EighteenPlus: { Male: 0, Female: 0 } };
+  list.forEach(v => { if (ag[v.ageGroup]) ag[v.ageGroup][v.gender] = (ag[v.ageGroup][v.gender] || 0) + 1; });
+  const tbody2 = document.querySelector("#age-gender-table tbody");
+  if (tbody2) {
+    tbody2.innerHTML = "";
+    [["<5", "Under5"], ["5-14", "FiveToFourteen"], ["15-17", "FifteenToSeventeen"], ["≥18", "EighteenPlus"]].forEach(([label, key]) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${label}</td><td>${ag[key].Male || 0}</td><td>${ag[key].Female || 0}</td>`;
+      tbody2.appendChild(tr);
+    });
+  }
+
+  // Top diagnoses
+  const counts = {};
+  list.forEach(v => {
+    const firstName = (v.diagnosisNames && v.diagnosisNames[0]) || v.diagnosisName || "";
+    if (!firstName) return;
+    counts[firstName] = (counts[firstName] || 0) + 1;
+  });
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const cont = document.getElementById("top-diags"); if (cont) { cont.innerHTML = ""; top.forEach(([name, c]) => { const div = document.createElement("div"); div.textContent = `${name}: ${c}`; cont.appendChild(div); }); }
+}
+
+/* ---------- Data table & export ---------- */
+function renderTable() {
+  const all
