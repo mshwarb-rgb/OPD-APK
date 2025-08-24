@@ -1,17 +1,58 @@
-- name: Install dependencies
-  run: npm install
+name: Build Android APK
 
-- name: Add Android platform (Capacitor)
-  run: npx cap add android   # <-- fixed, no --skip-npm
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
 
-- name: Setup Java 17
-  uses: actions/setup-java@v4
-  with:
-    distribution: temurin
-    java-version: 17
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
-- name: Setup Android SDK
-  uses: android-actions/setup-android@v3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-- name: Copy web to native
-  run: npx cap copy android
+      - name: Show repo tree (debug)
+        run: |
+          echo "Current directory:"
+          pwd
+          ls -la
+          echo "Contents of www/:"
+          ls -la www || true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Add Android platform (Capacitor)
+        run: npx cap add android
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Copy web to native
+        run: npx cap copy android
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OPD-LoggerX-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
