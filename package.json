@@ -2,7 +2,7 @@
   "name": "opd-loggerx-apk",
   "version": "1.0.0",
   "private": true,
-  "description": "Self-contained offline APK for OPD LoggerX",
+  "description": "Self-contained offline APK for OPD LoggerX with native CSV/XLS export",
   "scripts": {
     "android": "npx cap open android",
     "copy": "npx cap copy",
@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@capacitor/android": "^6.1.0",
-    "@capacitor/core": "^6.1.0"
+    "@capacitor/core": "^6.1.0",
+    "@capacitor/filesystem": "^6.0.0",
+    "@capacitor/share": "^6.0.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.1.0"
