@@ -90,9 +90,275 @@ function showScreen(name){
   scrData.style.display = (name==="data")?"":"none";
 }
 
-// ... [unchanged selectors, keypad, save/update/edit, summary, data-table code here] ...
+function buildSelectors(){
+  makeChips(document.getElementById("gender-chips"), Genders, i => { selGender=i; buildSelectors(); }, selGender);
 
-/* ===== Helpers for reliability ===== */
+  // Age chips
+  const ageWrap = document.getElementById("age-chips");
+  ageWrap.innerHTML = "";
+  Object.values(AgeLabels).forEach((label, idx) => {
+    const div = document.createElement("div");
+    div.className = "chip";
+    div.textContent = label;
+    if (selAge===idx) div.classList.add("selected");
+    div.onclick = () => { selAge=idx; buildSelectors(); };
+    ageWrap.appendChild(div);
+  });
+
+  // Diagnoses grid (multi-select up to 2)
+  makeDiagTiles(document.getElementById("diagnosis-grid"), Diagnoses, selDiags);
+  const diagCount = document.getElementById("diag-count");
+  if (diagCount) diagCount.textContent = selDiags.length ? `${selDiags.length}/2 selected` : "";
+
+  // WW visible if any Surgical
+  const anySurg = selDiags.some(no => DiagByNo[no]?.cat === "Surgical");
+  const wwSec = document.getElementById("ww-section");
+  if (anySurg) {
+    wwSec.style.display = "";
+    makeChips(document.getElementById("ww-chips"), WWOpts, i => { selWW=i; buildSelectors(); }, selWW);
+  } else {
+    wwSec.style.display = "none"; selWW=null;
+    const ww = document.getElementById("ww-chips"); if (ww) ww.innerHTML="";
+  }
+
+  // Disposition chips
+  const dispWrap = document.getElementById("disp-chips");
+  dispWrap.innerHTML = "";
+  Dispositions.forEach((label, idx) => {
+    const div = document.createElement("div");
+    div.className = "chip";
+    div.textContent = label;
+    if (selDisp===idx) div.classList.add("selected");
+    div.onclick = () => { selDisp=idx; buildSelectors(); };
+    dispWrap.appendChild(div);
+  });
+}
+
+function makeChips(container, options, onSelect, current){
+  container.innerHTML = "";
+  options.forEach((label, idx) => {
+    const div = document.createElement("div");
+    div.className = "chip" + (current===idx ? " selected": "");
+    div.textContent = label;
+    div.onclick = () => onSelect(idx);
+    container.appendChild(div);
+  });
+}
+
+function makeDiagTiles(container, items, selectedNos){
+  container.innerHTML = "";
+  items.forEach(([no, name, cat]) => {
+    const div = document.createElement("div");
+    const isSel = selectedNos.includes(no);
+    div.className = "tile" + (isSel ? " selected":"");
+    div.innerHTML = `<div>${no}. ${name}</div><div class="small">${cat}</div>`;
+    div.onclick = () => toggleDiag(no);
+    container.appendChild(div);
+  });
+}
+function toggleDiag(no){
+  const idx = selDiags.indexOf(no);
+  if (idx >= 0) selDiags.splice(idx,1);
+  else {
+    if (selDiags.length < 2) selDiags.push(no);
+    else { selDiags.shift(); selDiags.push(no); }
+  }
+  buildSelectors();
+}
+
+// Keypad & PID
+function onKeypad(e){
+  const k = e.currentTarget.dataset.k;
+  if (k === "C") selPID = "";
+  else if (k === "B") selPID = selPID.slice(0, -1);
+  else if (/^\d$/.test(k)) { if (selPID.length < 3) selPID += k; }
+  updatePID();
+}
+function updatePID(){
+  pidDisplay.textContent = selPID ? selPID : "---";
+  pidStatus.textContent = "";
+}
+
+// Validation + visit build
+function validateSelection(requirePID=true){
+  err.style.color = "#d93025"; err.textContent = "";
+  if (requirePID && (!selPID || selPID.length === 0)) { err.textContent = "Enter Patient ID (max 3 digits)."; return false; }
+  if (selGender===null || selAge===null || !selDiags.length || selDisp===null) { err.textContent="Select Gender, Age, ≥1 Diagnosis (max 2), and Disposition."; return false; }
+  const anySurg = selDiags.some(no => DiagByNo[no]?.cat === "Surgical");
+  if (anySurg && selWW===null) { err.textContent="Select WW or Non-WW for surgical diagnosis."; return false; }
+  return true;
+}
+function newUid(){ return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2,7); }
+function buildVisit(uidOverride=null, tsOverride=null){
+  const diags = selDiags.slice(0,2);
+  const names = diags.map(no => DiagByNo[no]?.name || "");
+  const cats  = diags.map(no => DiagByNo[no]?.cat || "");
+  const anySurg = cats.includes("Surgical");
+  return {
+    uid: uidOverride || newUid(),
+    timestamp: tsOverride || Date.now(),
+    patientId: selPID,
+    gender: Genders[selGender],
+    ageGroup: AgeKeys[selAge],
+    ageLabel: AgeLabels[AgeKeys[selAge]],
+    diagnosisNos: diags,
+    diagnosisNames: names,
+    diagnosisNoStr: diags.join("+"),
+    diagnosisNameStr: names.join(" + "),
+    clinicalCategory: anySurg ? "Surgical" : "Medical",
+    wwFlag: anySurg ? (WWOpts[selWW] || "NA") : "NA",
+    disposition: Dispositions[selDisp]
+  };
+}
+
+// Save / Update / Edit
+function onSave(){
+  if (!validateSelection(true)) return;
+  const all = loadAll();
+  all.push(buildVisit());
+  saveAll(all);
+  tinyToast("Saved. New entry ready.", true);
+  cancelEdit();
+  try { window.scrollTo({top: 0, behavior: "smooth"}); } catch(e){ window.scrollTo(0,0); }
+}
+function onUpdate(){
+  if (!validateSelection(false)) return;
+  if (!editUid) return tinyToast("Not in edit mode.", false);
+  const all = loadAll();
+  const idx = all.findIndex(v => v.uid === editUid);
+  if (idx === -1) return tinyToast("Record not found.", false);
+  all[idx] = buildVisit(editUid, all[idx].timestamp);
+  saveAll(all);
+  tinyToast("Updated.", true);
+  cancelEdit();
+}
+function enterEdit(record){
+  editUid = record.uid;
+  selPID = record.patientId || "";
+  selGender = Genders.indexOf(record.gender);
+  selAge = AgeKeys.indexOf(record.ageGroup);
+  if (record.diagnosisNos && Array.isArray(record.diagnosisNos)) selDiags = record.diagnosisNos.slice(0,2);
+  else if (record.diagnosisNo) selDiags = [record.diagnosisNo];
+  else if (record.diagnosisNoStr) selDiags = record.diagnosisNoStr.split("+").map(n=>parseInt(n,10)).filter(Boolean).slice(0,2);
+  else selDiags = [];
+  const anySurg = selDiags.some(no => DiagByNo[no]?.cat === "Surgical");
+  selWW = anySurg ? (record.wwFlag==="WW" ? 0 : record.wwFlag==="NonWW" ? 1 : null) : null;
+  selDisp = Dispositions.indexOf(record.disposition);
+  updatePID(); buildSelectors();
+  const saveNew = document.getElementById("save-new"); if (saveNew) saveNew.style.display = "none";
+  const updateBtn = document.getElementById("update"); if (updateBtn) updateBtn.style.display = "";
+  const cancelBtn = document.getElementById("cancel-edit"); if (cancelBtn) cancelBtn.style.display = "";
+  showScreen("new");
+}
+function cancelEdit(){
+  editUid = null;
+  selPID=""; selGender=null; selAge=null; selDiags=[]; selWW=null; selDisp=null;
+  updatePID(); buildSelectors();
+  const saveNew = document.getElementById("save-new"); if (saveNew) saveNew.style.display = "";
+  const updateBtn = document.getElementById("update"); if (updateBtn) updateBtn.style.display = "none";
+  const cancelBtn = document.getElementById("cancel-edit"); if (cancelBtn) cancelBtn.style.display = "none";
+}
+function resetForm(){ cancelEdit(); }
+
+/* ---------- Summary ---------- */
+function renderSummary(){
+  const all = loadAll();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const start = +today, end = start + 86400000 - 1;
+  const list = all.filter(v => v.timestamp >= start && v.timestamp <= end);
+
+  const total = list.length;
+  const male = list.filter(v => v.gender==="Male").length;
+  const female = list.filter(v => v.gender==="Female").length;
+
+  const a0 = list.filter(v => v.ageGroup==="Under5").length;
+  const a1 = list.filter(v => v.ageGroup==="FiveToFourteen").length;
+  const a2 = list.filter(v => v.ageGroup==="FifteenToSeventeen").length;
+  const a3 = list.filter(v => v.ageGroup==="EighteenPlus").length;
+
+  const surg = list.filter(v => v.clinicalCategory==="Surgical").length;
+  const med  = list.filter(v => v.clinicalCategory==="Medical").length;
+
+  const ww = list.filter(v => v.clinicalCategory==="Surgical" && v.wwFlag==="WW").length;
+  const non = list.filter(v => v.clinicalCategory==="Surgical" && v.wwFlag==="NonWW").length;
+
+  const setTxt = (id, val) => { const el=document.getElementById(id); if (el) el.textContent = val; };
+  setTxt("k-total", total);
+  setTxt("k-male", male);
+  setTxt("k-female", female);
+  setTxt("k-ww", `${ww}/${non}`);
+  setTxt("k-surg", surg);
+  setTxt("k-med", med);
+
+  // Age breakdown table
+  const tbody = document.querySelector("#age-breakdown-table tbody");
+  if (tbody){
+    tbody.innerHTML="";
+    [["<5",a0],["5–14",a1],["15–17",a2],["≥18",a3]].forEach(([label,count])=>{
+      const tr=document.createElement("tr");
+      tr.innerHTML = `<td>${label}</td><td>${count}</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // Age × Gender table
+  const ag = {Under5:{Male:0,Female:0}, FiveToFourteen:{Male:0,Female:0}, FifteenToSeventeen:{Male:0,Female:0}, EighteenPlus:{Male:0,Female:0}};
+  list.forEach(v => { if(ag[v.ageGroup]) ag[v.ageGroup][v.gender] = (ag[v.ageGroup][v.gender]||0)+1; });
+  const tbody2 = document.querySelector("#age-gender-table tbody");
+  if (tbody2){
+    tbody2.innerHTML="";
+    [["<5","Under5"],["5-14","FiveToFourteen"],["15-17","FifteenToSeventeen"],["≥18","EighteenPlus"]].forEach(([label,key])=>{
+      const tr=document.createElement("tr");
+      tr.innerHTML = `<td>${label}</td><td>${ag[key].Male||0}</td><td>${ag[key].Female||0}</td>`;
+      tbody2.appendChild(tr);
+    });
+  }
+
+  // Top diagnoses
+  const counts = {};
+  list.forEach(v => {
+    const firstName = (v.diagnosisNames && v.diagnosisNames[0]) || v.diagnosisName || "";
+    if (!firstName) return;
+    counts[firstName] = (counts[firstName]||0) + 1;
+  });
+  const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const cont = document.getElementById("top-diags");
+  if (cont) { cont.innerHTML=""; top.forEach(([name,c]) => { const div=document.createElement("div"); div.textContent=`${name}: ${c}`; cont.appendChild(div); }); }
+}
+
+/* ---------- Data table & export ---------- */
+function renderTable(){
+  const all = sortedAll();
+  const tbody = document.querySelector("#data-table tbody");
+  tbody.innerHTML = "";
+  const fmt = (t)=> new Date(t).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  all.forEach(v => {
+    const tr = document.createElement("tr");
+    const nos = v.diagnosisNoStr || (Array.isArray(v.diagnosisNos)? v.diagnosisNos.join("+") : (v.diagnosisNo ?? ""));
+    const names = v.diagnosisNameStr || (Array.isArray(v.diagnosisNames)? v.diagnosisNames.join(" + ") : (v.diagnosisName ?? ""));
+    tr.innerHTML = `<td>${fmt(v.timestamp)}</td>
+      <td>${v.patientId || ""}</td>
+      <td>${v.gender}</td>
+      <td>${v.ageLabel || ""}</td>
+      <td>${nos}</td>
+      <td>${names}</td>
+      <td>${(v.clinicalCategory||"")[0] || ""}</td>
+      <td>${v.wwFlag || "NA"}</td>
+      <td>${v.disposition || ""}</td>
+      <td><button class="btn secondary" data-uid="${v.uid}" style="padding:6px 8px;">Edit</button></td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll("button[data-uid]").forEach(btn => {
+    btn.onclick = () => {
+      const uid = btn.getAttribute("data-uid");
+      const all = sortedAll();
+      const rec = all.find(r => r.uid === uid);
+      if (rec) { enterEdit(rec); }
+    };
+  });
+}
+
+/* ===== Helpers for reliability (no UI change) ===== */
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 function debounce(fn, ms=350){
   let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
@@ -100,9 +366,10 @@ function debounce(fn, ms=350){
 function isNative(){
   return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 }
+function toBase64(str){ return btoa(unescape(encodeURIComponent(str))); } // small strings
 function toBase64Chunked(str){
   const utf8 = unescape(encodeURIComponent(str));
-  const chunkSize = 0x8000;
+  const chunkSize = 0x8000; // 32KB
   let result = "";
   for (let i = 0; i < utf8.length; i += chunkSize) {
     result += btoa(utf8.slice(i, i + chunkSize));
@@ -110,74 +377,205 @@ function toBase64Chunked(str){
   return result;
 }
 
-/* Robust save + share with retries */
+/**
+ * Robust save + share:
+ * - Writes to Cache dir (no permission issues)
+ * - Retries getUri in case FS is slow
+ * - Uses unique timestamped filenames to avoid file locks
+ * - Falls back to Downloads if needed
+ */
 async function saveAndShareNative(filename, mime, base64Data){
   const Cap = window.Capacitor;
   const FS = Cap && (Cap.Filesystem || Cap.Plugins?.Filesystem);
   const Share = Cap && (Cap.Share || Cap.Plugins?.Share);
-  if (!FS) return;
+  if (!FS) { console.error("Filesystem plugin missing"); return; }
 
-  const ts = new Date().toISOString().replace(/[:.]/g,"-").slice(0,19);
+  // Unique name to avoid collisions when tapping twice
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0,19);
   const safeName = filename.replace(/(\.[a-z0-9]+)$/i, `_${ts}$1`);
 
-  await FS.writeFile({ path: safeName, data: base64Data, directory: FS.Directory.Cache, recursive: true });
+  // 1) Write to Cache
+  await FS.writeFile({
+    path: safeName,
+    data: base64Data,
+    directory: FS.Directory.Cache,
+    recursive: true
+  });
 
-  let uri=null;
-  for(let i=0;i<3;i++){
+  // 2) Get content URI with retries
+  let uri = null;
+  for (let i = 0; i < 3; i++){
     try{
       const res = await FS.getUri({ path: safeName, directory: FS.Directory.Cache });
-      uri = res?.uri; if(uri) break;
-    }catch(e){}
-    await sleep(150+i*150);
+      uri = res && res.uri;
+      if (uri) break;
+    }catch(e){ /* retry */ }
+    await sleep(150 + i*150);
   }
 
-  if(uri && Share){
-    try{ await Share.share({ title:`Export ${filename}`, text:`Exported ${filename}`, url:uri }); return; }
-    catch(e){ console.warn("Share failed:",e); }
+  // 3) Share
+  if (uri && Share){
+    try{
+      await Share.share({
+        title: `Export ${filename}`,
+        text: `Exported ${filename}`,
+        url: uri,
+        dialogTitle: "Share/export file"
+      });
+      return;
+    }catch(e){
+      console.warn("Share failed, will attempt Downloads fallback:", e);
+    }
   }
 
-  // Fallback: Downloads
+  // 4) Fallback to Downloads
   try{
-    const dlPath=`Download/${safeName}`;
-    await FS.writeFile({ path: dlPath, data: base64Data, directory: FS.Directory.ExternalStorage, recursive: true });
-    const res=await FS.getUri({ path: dlPath, directory: FS.Directory.ExternalStorage });
-    if(res?.uri && Share) await Share.share({ title:`Export ${filename}`, text:"Saved to Downloads", url:res.uri });
-  }catch(e2){ console.error("Fallback failed:",e2); }
+    const dlPath = `Download/${safeName}`;
+    await FS.writeFile({
+      path: dlPath,
+      data: base64Data,
+      directory: FS.Directory.ExternalStorage,
+      recursive: true
+    });
+    const res = await FS.getUri({ path: dlPath, directory: FS.Directory.ExternalStorage });
+    if (res?.uri && Share){
+      await Share.share({ title: `Export ${filename}`, text: "Saved to Downloads", url: res.uri });
+      return;
+    }
+  }catch(e2){
+    console.error("Downloads fallback failed:", e2);
+  }
+
+  // 5) Last-resort: browser-like download
+  try{
+    const raw = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+    const blob = new Blob([raw], { type: mime });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = safeName;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }catch(e3){
+    console.error("Final fallback failed:", e3);
+  }
 }
 
-/* ---------- Export CSV ---------- */
+/* ---------- Export CSV / Excel ---------- */
 async function downloadCSV(list){
-  const header=["timestamp","patient_id","gender","age_group","diagnosis_nos","diagnosis_names","clinical_category","ww_flag","disposition"];
-  const rows=[header].concat(list.map(v=>[
-    v.timestamp,v.patientId||"",v.gender,v.ageLabel||"",
-    v.diagnosisNoStr||(Array.isArray(v.diagnosisNos)?v.diagnosisNos.join("+"):(v.diagnosisNo??"")),
-    v.diagnosisNameStr||(Array.isArray(v.diagnosisNames)?v.diagnosisNames.join(" + "):(v.diagnosisName??"")),
-    v.clinicalCategory||"",v.wwFlag||"NA",v.disposition||""
+  const header = ["timestamp","patient_id","gender","age_group","diagnosis_nos","diagnosis_names","clinical_category","ww_flag","disposition"];
+  const rows = [header].concat(list.map(v => [
+    v.timestamp,
+    v.patientId || "",
+    v.gender,
+    v.ageLabel || "",
+    v.diagnosisNoStr || (Array.isArray(v.diagnosisNos)? v.diagnosisNos.join("+") : (v.diagnosisNo ?? "")),
+    v.diagnosisNameStr || (Array.isArray(v.diagnosisNames)? v.diagnosisNames.join(" + ") : (v.diagnosisName ?? "")),
+    v.clinicalCategory || "",
+    v.wwFlag || "NA",
+    v.disposition || ""
   ]));
-  const csv=rows.map(r=>r.map(x=>(""+x).replace(/,/g,";")).join(",")).join("\n");
-  const filename=`OPD_${new Date().toISOString().slice(0,10)}.csv`;
+  const csv = rows.map(r => r.map(x => (""+x).replace(/,/g,";")).join(",")).join("\n");
+  const filename = `OPD_${new Date().toISOString().slice(0,10)}.csv`;
 
-  if(isNative()){ await sleep(50); await saveAndShareNative(filename,"text/csv;charset=utf-8",toBase64Chunked(csv)); }
-  else { const blob=new Blob([csv],{type:"text/csv;charset=utf-8"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); URL.revokeObjectURL(a.href); }
+  if (isNative()){
+    await sleep(50); // let Share get ready
+    const b64 = toBase64Chunked(csv);
+    await saveAndShareNative(filename, "text/csv;charset=utf-8", b64);
+  } else {
+    const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+  }
 }
 
-/* ---------- Export Excel ---------- */
 async function downloadXLS(list){
-  const header=["timestamp","patient_id","gender","age_group","diagnosis_nos","diagnosis_names","clinical_category","ww_flag","disposition"];
-  const rows=list.map(v=>[
-    v.timestamp,v.patientId||"",v.gender,v.ageLabel||"",
-    v.diagnosisNoStr||(Array.isArray(v.diagnosisNos)?v.diagnosisNos.join("+"):(v.diagnosisNo??"")),
-    v.diagnosisNameStr||(Array.isArray(v.diagnosisNames)?v.diagnosisNames.join(" + "):(v.diagnosisName??"")),
-    v.clinicalCategory||"",v.wwFlag||"NA",v.disposition||""
+  const header = ["timestamp","patient_id","gender","age_group","diagnosis_nos","diagnosis_names","clinical_category","ww_flag","disposition"];
+  const rows = list.map(v => [
+    v.timestamp,
+    v.patientId || "",
+    v.gender,
+    v.ageLabel || "",
+    v.diagnosisNoStr || (Array.isArray(v.diagnosisNos)? v.diagnosisNos.join("+") : (v.diagnosisNo ?? "")),
+    v.diagnosisNameStr || (Array.isArray(v.diagnosisNames)? v.diagnosisNames.join(" + ") : (v.diagnosisName ?? "")),
+    v.clinicalCategory || "",
+    v.wwFlag || "NA",
+    v.disposition || ""
   ]);
-  const esc=s=>String(s).replace(/[<&>]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
-  let table='<table border="1"><tr>'+header.map(h=>`<th>${esc(h)}</th>`).join('')+'</tr>';
-  rows.forEach(r=>{ table+='<tr>'+r.map(x=>`<td>${esc(x)}</td>`).join('')+'</tr>'; }); table+='</table>';
-  const workbookHTML=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="UTF-8"></head><body>${table}</body></html>`;
-  const filename=`OPD_${new Date().toISOString().slice(0,10)}.xls`;
 
-  if(isNative()){ await sleep(50); await saveAndShareNative(filename,"application/vnd.ms-excel;charset=utf-8",toBase64Chunked(workbookHTML)); }
-  else { const blob=new Blob([workbookHTML],{type:"application/vnd.ms-excel;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url); }
+  const esc = s => String(s).replace(/[<&>]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+  let table = '<table border="1"><tr>' + header.map(h=>`<th>${esc(h)}</th>`).join('') + '</tr>';
+  rows.forEach(r => { table += '<tr>' + r.map(x=>`<td>${esc(x)}</td>`).join('') + '</tr>'; });
+  table += '</table>';
+
+  const workbookHTML = `
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:x="urn:schemas-microsoft-com:office:excel"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="UTF-8">
+<!--[if gte mso 9]><xml>
+ <x:ExcelWorkbook>
+  <x:ExcelWorksheets>
+   <x:ExcelWorksheet>
+    <x:Name>OPD</x:Name>
+    <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+   </x:ExcelWorksheet>
+  </x:ExcelWorksheets>
+ </x:ExcelWorkbook>
+</xml><![endif]-->
+</head>
+<body>
+${table}
+</body>
+</html>`.trim();
+
+  const filename = `OPD_${new Date().toISOString().slice(0,10)}.xls`;
+
+  if (isNative()){
+    await sleep(50);
+    const b64 = toBase64Chunked(workbookHTML);
+    await saveAndShareNative(filename, "application/vnd.ms-excel;charset=utf-8", b64);
+  } else {
+    try{
+      const blob = new Blob([workbookHTML], { type: "application/vnd.ms-excel;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    } catch(e) {
+      const dataUrl = "data:application/vnd.ms-excel;charset=utf-8," + encodeURIComponent(workbookHTML);
+      const a = document.createElement("a"); a.href = dataUrl; a.download = filename; a.click();
+    }
+  }
 }
 
-// ... [backup/restore/clear functions here, unchanged] ...
+/* ---------- JSON backup/restore & clear ---------- */
+function downloadJSON(list){
+  const blob = new Blob([JSON.stringify(list)], {type:"application/json"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "OPD_backup.json"; a.click(); URL.revokeObjectURL(a.href);
+}
+function restoreJSON(e){
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (!Array.isArray(data)) throw new Error("Invalid file");
+      const byUid = {}; sortedAll().forEach(x => byUid[x.uid] = x);
+      data.forEach(x => { byUid[x.uid || (Date.now()+"-"+Math.random())] = x; });
+      const merged = Object.values(byUid).sort((a,b)=>a.timestamp-b.timestamp);
+      saveAll(merged); renderTable();
+      tinyToast("Data restored/merged.", true);
+    } catch(err) { tinyToast("Restore failed: " + err.message, false); }
+  };
+  reader.readAsText(file);
+}
+function clearAll(){
+  if (!confirm("Clear ALL saved visits from this device?")) return;
+  saveAll([]); renderTable(); tinyToast("Cleared.", true);
+}
+
+function tinyToast(msg, ok){
+  err.style.color = ok ? "#107c41" : "#d93025";
+  err.textContent = msg;
+  setTimeout(()=>{ err.textContent=""; err.style.color="#d93025"; }, 1400);
+}
